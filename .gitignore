@@ -1,0 +1,7 @@
+# Chrome writes this when loading the extension unpacked
+_metadata/
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+.DS_Store

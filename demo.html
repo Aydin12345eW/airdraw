@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AirDraw demo</title>
+<!--
+  AirDraw local demo — runs the extension's real modules (src/*.js +
+  vendor/mediapipe) against your webcam on this page, instead of patching
+  getUserMedia inside a Meet/Teams call. The big canvas is exactly the frame
+  that would be sent to other participants; the tracking overlay on top of it
+  is local-only.
+
+  ES modules + wasm can't load from file://, so serve the repo root:
+    python3 -m http.server 8000
+  then open http://localhost:8000/demo.html
+-->
+<style>
+  :root {
+    --bg: #0f1012;
+    --panel: #1a1c20;
+    --line: #2c2f36;
+    --text: #e8e9ec;
+    --muted: #9a9ea8;
+    --accent: #ffeb3b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 14px/1.45 system-ui, -apple-system, sans-serif;
+    padding: 20px 16px 32px;
+  }
+  header, main { max-width: 1280px; margin: 0 auto; }
+  header { margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h1 span { color: var(--muted); font-weight: 500; }
+  header p { margin: 0; color: var(--muted); max-width: 70ch; }
+  code {
+    font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #25282e; padding: 1px 5px; border-radius: 4px;
+  }
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    gap: 16px;
+    align-items: start;
+  }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  .stage-wrap {
+    position: relative;
+    background: #000;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    aspect-ratio: var(--ar, 16 / 9);
+    width: min(100%, calc((100vh - 230px) * var(--ar, 1.7778)));
+    margin: 0 auto;
+  }
+  .stage { position: absolute; inset: 0; }
+  .stage.mirrored { transform: scaleX(-1); }
+  .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  .placeholder {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; padding: 24px; text-align: center; color: var(--muted);
+  }
+  .placeholder p { margin: 0; max-width: 52ch; }
+
+  .toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px;
+    margin-top: 12px; padding: 10px 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  }
+  .toolbar label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
+  .toolbar .spacer { flex: 1; }
+  .swatches { display: flex; gap: 6px; }
+  .swatch {
+    width: 22px; height: 22px; border-radius: 50%; padding: 0; cursor: pointer;
+    border: 2px solid #444;
+  }
+  .swatch[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: 2px; }
+  button {
+    font: inherit; color: var(--text); background: #2a2d34;
+    border: 1px solid #3a3e46; border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #33373f; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.primary { background: var(--accent); color: #111; border-color: transparent; font-weight: 600; padding: 9px 18px; }
+  .stats { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); margin-top: 8px; text-align: right; }
+
+  aside {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px;
+  }
+  aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  aside ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+  aside li { display: grid; grid-template-columns: 28px 1fr; gap: 8px; }
+  aside li .ico { font-size: 18px; line-height: 1.2; }
+  aside li b { display: block; }
+  aside li span { color: var(--muted); font-size: 13px; }
+  aside .note { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AirDraw <span>· local demo</span></h1>
+  <p>Same hand tracking, gestures, shape snap and rendering as the extension, drawing onto a canvas on this page instead of the video you send to a call.</p>
+</header>
+
+<main>
+  <section>
+    <div class="stage-wrap" id="stageWrap">
+      <div class="stage mirrored" id="stage">
+        <canvas id="output"></canvas>
+        <canvas id="debug"></canvas>
+      </div>
+      <div class="placeholder" id="placeholder">
+        <p id="status">Loading hand tracking…</p>
+        <button class="primary" id="start" disabled>Start camera</button>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <div class="swatches" id="swatches" role="group" aria-label="Stroke color"></div>
+      <label>Width <input type="range" id="width" min="4" max="32" step="1"></label>
+      <label><input type="checkbox" id="snap"> Shape snap</label>
+      <label><input type="checkbox" id="mirror" checked> Mirror preview</label>
+      <label><input type="checkbox" id="debugToggle" checked> Tracking overlay</label>
+      <span class="spacer"></span>
+      <button id="undo" title="Undo (Z)">Undo</button>
+      <button id="clear" title="Clear (C)">Clear</button>
+    </div>
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <aside>
+    <h2>Gestures</h2>
+    <ul>
+      <li><span class="ico">🤏</span><div><b>Pinch to draw</b><span>Thumb + index tip together puts the pen down, open them to lift it.</span></div></li>
+      <li><span class="ico">✌️</span><div><b>Hover</b><span>Index + middle up, others curled. Move around without drawing.</span></div></li>
+      <li><span class="ico">↔️</span><div><b>Undo</b><span>From hover pose, quick sideways swipe (≈ ⅕ of the frame in under 0.45s).</span></div></li>
+      <li><span class="ico">🖐️</span><div><b>Erase</b><span>Hold an open palm for 0.3s, then wipe. Only the ink under your palm goes.</span></div></li>
+      <li><span class="ico">🙌</span><div><b>Clear all</b><span>Both palms open, held for 2s.</span></div></li>
+      <li><span class="ico">⭕</span><div><b>Shape snap</b><span>Big lines, circles, rectangles, and arrows (flick back at the end) snap clean. Only kicks in above ¼ of frame width, so handwriting stays as-is.</span></div></li>
+    </ul>
+    <p class="note">The big canvas is the exact frame the extension sends to participants. The skeleton, cursor and palm outline are only drawn here, never sent. <b>Mirror preview</b> flips what you see to match Meet's self-view. Turn it off to see the call from a participant's side.</p>
+  </aside>
+</main>
+
+<script type="module">
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $("status");
+  const startBtn = $("start");
+
+  // Standard MediaPipe 21-point hand connections, for the local debug layer.
+  const HAND_CONNECTIONS = [
+    [0, 1], [1, 2], [2, 3], [3, 4],
+    [0, 5], [5, 6], [6, 7], [7, 8],
+    [5, 9], [9, 10], [10, 11], [11, 12],
+    [9, 13], [13, 14], [14, 15], [15, 16],
+    [13, 17], [17, 18], [18, 19], [19, 20], [0, 17],
+  ];
+
+  main().catch((err) => {
+    console.error("[AirDraw demo]", err);
+    statusEl.textContent = "Failed to load: " + (err?.message || err);
+  });
+
+  async function main() {
+    if (location.protocol === "file:") {
+      statusEl.innerHTML =
+        "Browsers won't load ES modules or wasm from <code>file://</code>.<br><br>" +
+        "From the repo root run <code>python3 -m http.server 8000</code><br>" +
+        "then open <code>http://localhost:8000/demo.html</code>";
+      startBtn.hidden = true;
+      return;
+    }
+
+    const [
+      { CONFIG, LANDMARK },
+      { HandTracker },
+      { GestureEngine },
+      { createStroke, addPoint, trySnapStroke, eraseInsideHull, convexHull },
+      { renderFrame },
+      { createOverlay },
+    ] = await Promise.all([
+      import("./src/config.js"),
+      import("./src/tracking.js"),
+      import("./src/gestures.js"),
+      import("./src/canvas.js"),
+      import("./src/render.js"),
+      import("./src/overlay.js"),
+    ]);
+
+    const tracker = new HandTracker();
+    await tracker.init(new URL("vendor/", location.href).href);
+    const gestureEngine = new GestureEngine();
+    const overlay = createOverlay();
+    overlay.update({ enabled: true, gesture: "idle", color: CONFIG.PALETTE[CONFIG.DEFAULT_COLOR_INDEX] });
+
+    // Same eraser hull as inject.js: palm base points plus every fingertip.
+    const ERASER_HULL_INDICES = [
+      LANDMARK.WRIST, LANDMARK.THUMB_MCP, LANDMARK.INDEX_MCP, LANDMARK.MIDDLE_MCP,
+      LANDMARK.RING_MCP, LANDMARK.PINKY_MCP, LANDMARK.THUMB_TIP, LANDMARK.INDEX_TIP,
+      LANDMARK.MIDDLE_TIP, LANDMARK.RING_TIP, LANDMARK.PINKY_TIP,
+    ];
+
+    const settings = {
+      color: CONFIG.PALETTE[CONFIG.DEFAULT_COLOR_INDEX],
+      width: CONFIG.STROKE_WIDTH_BASE_PX,
+      snapEnabled: CONFIG.SNAP_ENABLED_DEFAULT,
+    };
+
+    let strokes = [];
+    const activeStrokes = new Map(); // handedness -> in-progress stroke
+
+    setupControls();
+    statusEl.textContent = "Hand tracking ready.";
+    startBtn.disabled = false;
+    startBtn.addEventListener("click", async () => {
+      startBtn.disabled = true;
+      statusEl.textContent = "Waiting for camera permission…";
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        start(stream);
+      } catch (err) {
+        statusEl.textContent = "Camera access failed: " + (err?.message || err);
+        startBtn.disabled = false;
+      }
+    });
+
+    function setupControls() {
+      const swatches = $("swatches");
+      for (const color of CONFIG.PALETTE) {
+        const b = document.createElement("button");
+        b.className = "swatch";
+        b.style.background = color;
+        b.title = color;
+        b.setAttribute("aria-pressed", String(color === settings.color));
+        b.addEventListener("click", () => {
+          settings.color = color;
+          for (const s of swatches.children) s.setAttribute("aria-pressed", String(s === b));
+        });
+        swatches.appendChild(b);
+      }
+
+      const width = $("width");
+      width.value = settings.width;
+      width.addEventListener("input", () => (settings.width = Number(width.value)));
+
+      const snap = $("snap");
+      snap.checked = settings.snapEnabled;
+      snap.addEventListener("change", () => (settings.snapEnabled = snap.checked));
+
+      $("mirror").addEventListener("change", (e) =>
+        $("stage").classList.toggle("mirrored", e.target.checked)
+      );
+
+      const undo = () => { strokes.pop(); };
+      const clear = () => { strokes = []; activeStrokes.clear(); };
+      $("undo").addEventListener("click", undo);
+      $("clear").addEventListener("click", clear);
+      addEventListener("keydown", (e) => {
+        if (e.target instanceof HTMLInputElement && e.target.type !== "checkbox") return;
+        if (e.key === "z" || e.key === "Z") undo();
+        if (e.key === "c" || e.key === "C") clear();
+      });
+    }
+
+    function start(stream) {
+      const track = stream.getVideoTracks()[0];
+      const ts = track.getSettings();
+      const width = ts.width || 1280;
+      const height = ts.height || 720;
+
+      const video = document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      video.play().catch(() => {});
+
+      const canvas = $("output");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d", { alpha: false });
+
+      const debugCanvas = $("debug");
+      debugCanvas.width = width;
+      debugCanvas.height = height;
+      const dctx = debugCanvas.getContext("2d");
+      const debugToggle = $("debugToggle");
+
+      $("stageWrap").style.setProperty("--ar", String(width / height));
+      $("placeholder").hidden = true;
+
+      function finishStroke(handedness) {
+        const stroke = activeStrokes.get(handedness);
+        if (!stroke) return;
+        activeStrokes.delete(handedness);
+        if (stroke.points.length < 2) return; // a tap, not a stroke
+        trySnapStroke(stroke, canvas.width, settings.snapEnabled);
+        strokes.push(stroke);
+      }
+
+      // Mirrors processHandsAndGestures() in inject.js, but also hands the
+      // raw + classified hands back so the local debug layer can draw them.
+      function processHands(nowMs) {
+        const hands = tracker.update(video, nowMs);
+        const { hands: gestureHands, events } = gestureEngine.update(
+          hands, nowMs, canvas.width, canvas.height
+        );
+
+        if (events.clearAll) { strokes = []; activeStrokes.clear(); }
+        if (events.undo && strokes.length > 0) strokes.pop();
+
+        const seen = new Set();
+        for (const hand of gestureHands) {
+          seen.add(hand.handedness);
+          if (hand.gesture === "pen") {
+            let stroke = activeStrokes.get(hand.handedness);
+            if (!stroke) {
+              stroke = createStroke(settings.color, settings.width);
+              activeStrokes.set(hand.handedness, stroke);
+            }
+            addPoint(stroke, hand.point.x, hand.point.y);
+          } else {
+            finishStroke(hand.handedness);
+          }
+          if (hand.gesture === "eraser") {
+            const hull = ERASER_HULL_INDICES.map((i) => ({
+              x: hand.hullLandmarks[i].x * canvas.width,
+              y: hand.hullLandmarks[i].y * canvas.height,
+            }));
+            strokes = eraseInsideHull(strokes, hull);
+          }
+        }
+        for (const h of [...activeStrokes.keys()]) if (!seen.has(h)) finishStroke(h);
+
+        overlay.update({
+          enabled: true,
+          gesture: gestureHands[0] ? gestureHands[0].gesture : "idle",
+          color: settings.color,
+        });
+        return { hands, gestureHands };
+      }
+
+      function drawDebug(hands, gestureHands) {
+        dctx.clearRect(0, 0, width, height);
+        if (!debugToggle.checked) return;
+        const u = height / 720;
+
+        hands.forEach((hand, i) => {
+          const g = gestureHands[i] || {};
+          const pts = hand.landmarks.map((lm) => ({ x: lm.x * width, y: lm.y * height }));
+
+          if (g.gesture === "eraser" || g.gesture === "openPalm") {
+            const hull = convexHull(ERASER_HULL_INDICES.map((j) => pts[j]));
+            dctx.beginPath();
+            hull.forEach((p, k) => (k ? dctx.lineTo(p.x, p.y) : dctx.moveTo(p.x, p.y)));
+            dctx.closePath();
+            if (g.gesture === "eraser") {
+              dctx.fillStyle = "rgba(255, 82, 82, 0.22)";
+              dctx.fill();
+            }
+            dctx.setLineDash(g.gesture === "eraser" ? [] : [8 * u, 6 * u]);
+            dctx.strokeStyle = "rgba(255, 120, 120, 0.9)";
+            dctx.lineWidth = 2 * u;
+            dctx.stroke();
+            dctx.setLineDash([]);
+          }
+
+          dctx.strokeStyle = "rgba(255, 255, 255, 0.45)";
+          dctx.lineWidth = 2 * u;
+          dctx.beginPath();
+          for (const [a, b] of HAND_CONNECTIONS) {
+            dctx.moveTo(pts[a].x, pts[a].y);
+            dctx.lineTo(pts[b].x, pts[b].y);
+          }
+          dctx.stroke();
+          dctx.fillStyle = "rgba(255, 255, 255, 0.75)";
+          for (const p of pts) {
+            dctx.beginPath();
+            dctx.arc(p.x, p.y, 2.5 * u, 0, Math.PI * 2);
+            dctx.fill();
+          }
+
+          if (g.point) {
+            const pen = g.gesture === "pen";
+            dctx.beginPath();
+            dctx.arc(g.point.x, g.point.y, (pen ? 7 : 11) * u, 0, Math.PI * 2);
+            dctx.lineWidth = 3 * u;
+            dctx.strokeStyle = pen ? settings.color : "rgba(255, 255, 255, 0.9)";
+            dctx.stroke();
+          }
+        });
+      }
+
+      const statsEl = $("stats");
+      let trackingBroken = false;
+      let frames = 0;
+      let fpsWindowStart = performance.now();
+      let fps = 0;
+
+      function frame() {
+        const nowMs = performance.now();
+        let debug = { hands: [], gestureHands: [] };
+        try {
+          if (!trackingBroken && video.readyState >= 2) debug = processHands(nowMs);
+        } catch (err) {
+          trackingBroken = true;
+          console.error("[AirDraw demo] tracking/gesture error, drawing disabled", err);
+          statsEl.textContent = "Tracking crashed, see console";
+        }
+
+        renderFrame(ctx, canvas, video, strokes,
+          [...activeStrokes.values()], nowMs);
+        drawDebug(debug.hands, debug.gestureHands);
+
+        frames++;
+        if (nowMs - fpsWindowStart >= 500) {
+          fps = (frames * 1000) / (nowMs - fpsWindowStart);
+          frames = 0;
+          fpsWindowStart = nowMs;
+          if (!trackingBroken) {
+            statsEl.textContent =
+              `${width}×${height} · ${fps.toFixed(0)} fps · ` +
+              `inference ${tracker.lastInferenceMs.toFixed(1)} ms` +
+              (tracker.skipAlternateFrames ? " (tracking every 2nd frame)" : "") +
+              ` · ${strokes.length} stroke${strokes.length === 1 ? "" : "s"}`;
+          }
+        }
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    }
+  }
+</script>
+</body>
+</html>
