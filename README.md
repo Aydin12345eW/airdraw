@@ -6,17 +6,40 @@ with nothing installed on their end.
 
 Hand tracking runs locally via MediaPipe — camera frames never leave your machine.
 
-## Install (unpacked)
+## Install
 
-There is no build step; the repo loads as-is.
+### Download the zip
 
-1. Clone or download this repo.
+Grab `airdraw-<version>.zip` from the
+[latest release](https://github.com/Aydin12345eW/airdraw/releases/latest),
+then **unzip it** — Chrome loads a folder, not a zip.
+
+1. Unzip the download.
 2. Open `chrome://extensions` and turn on **Developer mode** (top right).
-3. Click **Load unpacked** and select the folder containing `manifest.json`.
+3. Click **Load unpacked** and select the unzipped folder (the one with
+   `manifest.json` directly inside it).
 4. Join a Meet or Teams call and allow camera access.
 
+Chrome blocks installing an extension by dragging a zip or `.crx` onto the
+extensions page — that path only works for Web Store listings, so unzip and
+load unpacked is the route until AirDraw is published.
+
 Works in any Chromium browser (Chrome, Edge, Brave, Arc). Unpacked extensions
-do not auto-update — pull and hit reload on the extensions page.
+do not auto-update; to upgrade, download the new zip and hit reload on the
+extensions page.
+
+### From a clone
+
+Same as above, minus the download — `chrome://extensions` → Developer mode →
+Load unpacked → pick the repo folder. There is no build step.
+
+### Building the zip
+
+    ./scripts/build-zip.sh
+
+Reads the version from `manifest.json` and writes `dist/airdraw-<version>.zip`
+with the manifest at the archive root, which is what both "Load unpacked" and
+the Chrome Web Store expect. `dist/` is gitignored.
 
 ## Local demo
 

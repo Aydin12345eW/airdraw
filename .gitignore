@@ -5,3 +5,6 @@ _metadata/
 .claude/settings.local.json
 
 .DS_Store
+
+# Built release zips — attach to a GitHub Release instead
+dist/
