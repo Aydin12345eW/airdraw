@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "AirDraw",
+  "version": "0.2.0",
+  "description": "Draw in the air with your hand during Google Meet and Teams calls — everyone sees it, no install needed on their end.",
+  "permissions": ["declarativeNetRequestWithHostAccess"],
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://teams.microsoft.com/*",
+    "https://teams.live.com/*"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "remove_csp",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*"
+      ],
+      "js": ["src/content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/inject.js",
+        "src/config.js",
+        "src/tracking.js",
+        "src/gestures.js",
+        "src/canvas.js",
+        "src/render.js",
+        "src/overlay.js",
+        "vendor/mediapipe/vision_bundle.mjs",
+        "vendor/mediapipe/hand_landmarker.task",
+        "vendor/mediapipe/wasm/vision_wasm_internal.js",
+        "vendor/mediapipe/wasm/vision_wasm_internal.wasm",
+        "vendor/mediapipe/wasm/vision_wasm_nosimd_internal.js",
+        "vendor/mediapipe/wasm/vision_wasm_nosimd_internal.wasm"
+      ],
+      "matches": [
+        "https://meet.google.com/*",
+        "https://teams.microsoft.com/*",
+        "https://teams.live.com/*"
+      ]
+    }
+  ]
+}
